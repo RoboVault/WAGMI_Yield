@@ -11,3 +11,5 @@ build/interfaces/IUniswapV2Router01.json
 build/interfaces/IUniswapV2Router02.json
 build/interfaces/vault.json
 tests/test_option.py
+tests/__pycache__/conftest.cpython-38-pytest-6.2.3.pyc
+tests/__pycache__/test_option.cpython-38-pytest-6.2.3.pyc

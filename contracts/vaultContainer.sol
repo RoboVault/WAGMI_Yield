@@ -17,14 +17,21 @@ import "../interfaces/uniswap.sol";
 import "../interfaces/vaults.sol";
 
 
-/// this contract holds funds in escrow until option expires allowing buyer to excercise by swapping short for base at pre-agreed exchange rate (amtOwed / collatAmt)
-/// owner also has option to deploy collateral to a vault to earn yield while still being locked + also can re-issue new options once currently issued options have expired
+/*
+The vault container essentially allows users to deposit funds which are then deployed to a single asset vault i.e YEARN / ROBOVAULT 
+at each EPOCH any yield / profit generate from the strategy is then used to purchase the TARGET Token of the users choice 
+For example this would give users the ability to deposit into a USDC vault while their USDC balance will remain the same extra USDC could be used to buy 
+a target token such as gOHM 
+
+Additionally some mechanics on vesting of the target tokens are built in encouraging users to keep their assets in the vault container over a longer period
+*/
+
 contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
 
     struct UserInfo {
         uint256 amount;     // How many tokens the user has provided.
         uint256 epochStart; // at what Epoch will rewards start 
-        uint256 depositTime; // 
+        uint256 depositTime; // when did the user deposit 
     }
 
 
@@ -39,8 +46,10 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
     address public vaultAddress;
     address public router;
     address public weth; 
-    uint256 timePerEpoch  = 43200;
+    uint256 timePerEpoch = 43200;
+    uint256 public vestingTime = 432000;
     uint256 lastEpoch;
+    uint256 public unvestedTokens = 0; 
     uint256 public epoch = 0; 
     mapping (address => UserInfo) public userInfo;
     mapping (uint256 => uint256) public epochRewards; 
@@ -66,10 +75,9 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         base.approve(router, uint(-1));
         weth = _weth;
 
-
     }
 
-    // user deposits token to vault in exchange for pool shares which can later be redeemed for assets + accumulated yield
+    // user deposits token to vault container in exchange for pool shares which can later be redeemed for assets + accumulated yield
     function deposit(uint256 _amount) public nonReentrant
     {
       require(_amount > 0, "deposit must be greater than 0");
@@ -121,7 +129,6 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
 
       userInfo[msg.sender] = UserInfo(balanceOf(msg.sender), epoch, block.timestamp);
 
-
     }
     
     function withdrawAll() public {
@@ -130,7 +137,6 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         
     }
 
-    /// to check that funds are enough to create options and lock in escrow 
     function balanceBase() public view returns(uint256) {
         uint256 bal = base.balanceOf(address(this));
         IERC20 vaultToken = IERC20(vaultAddress);
@@ -164,6 +170,13 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         vault(vaultAddress).withdraw();
     }
 
+    function updateVault(address _newVault) external onlyOwner {
+        _withdrawFromVault();
+        vaultAddress = _newVault;
+        base.approve(vaultAddress, uint(-1));   
+        _depositToVault();     
+    }
+
     function getTokenOutPath(address _token_in, address _token_out)
         internal
         view
@@ -191,17 +204,30 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         uint256 preSwapBalance = targetToken.balanceOf(address(this));
         IUniswapV2Router01(router).swapExactTokensForTokens(profits, amountOutMin, path, address(this), now);
         _depositToVault();
-        epochRewards[epoch] = targetToken.balanceOf(address(this)).sub(preSwapBalance); 
+        epochRewards[epoch] = (targetToken.balanceOf(address(this)).sub(preSwapBalance)).add(unvestedTokens); 
         epochBalance[epoch] = totalSupply();
         epoch = epoch.add(1);
         lastEpoch = block.timestamp;
+        unvestedTokens = 0;
 
 
     }
 
     function _disburseRewards(address _user) internal {
         uint256 rewards = getUserRewards(_user);
+        uint256 vestedRewards = rewards.mul(getVestingPercent(_user)).div(BPS_adj);
+        uint256 userUnvested = rewards.sub(vestedRewards);
+        unvestedTokens = unvestedTokens.add(userUnvested);
         targetToken.transfer(_user, rewards);
+    }
+
+    function getVestingPercent(address _user) public returns (uint256) {
+        UserInfo storage user = userInfo[_user];
+        uint256 vestPercent = ((block.timestamp).sub(user.depositTime)).mul(BPS_adj).div(vestingTime);
+        if (vestPercent > BPS_adj){
+            vestPercent = BPS_adj;
+        }
+        return(vestPercent);
     }
 
 
