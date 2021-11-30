@@ -15,6 +15,7 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import "../interfaces/uniswap.sol";
 import "../interfaces/vaults.sol";
+import "../interfaces/IStrategy.sol";
 
 
 /*
@@ -54,7 +55,8 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
     mapping (address => UserInfo) public userInfo;
     mapping (uint256 => uint256) public epochRewards; 
     mapping (uint256 => uint256) public epochBalance; 
-
+    IStrategy public underlyingStrategy;
+    address public keeper;
 
     constructor(
         string memory _name, 
@@ -63,8 +65,8 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         address _targetToken,
         address _vault,
         address _router,
-        address _weth
-
+        address _weth,
+        address _underlyingStrategy
     ) public ERC20(_name, _symbol) {
         base = IERC20(_base);
         targetToken = IERC20(_targetToken);
@@ -74,7 +76,17 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         base.approve(vaultAddress, uint(-1));
         base.approve(router, uint(-1));
         weth = _weth;
+        underlyingStrategy = IStrategy(underlyingStrategy);
+    }
 
+    modifier onlyAuthorized() {
+        require(msg.sender == keeper || msg.sender == owner(), "!authorized");
+        _;
+    }
+
+    function setKeeper(address _keeper) external onlyAuthorized {
+        require(_keeper != address(0));
+        keeper = _keeper;
     }
 
     // user deposits token to vault container in exchange for pool shares which can later be redeemed for assets + accumulated yield
@@ -105,7 +117,7 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         uint256 balance = base.balanceOf(msg.sender); 
         deposit(balance); 
     }
-    
+
     // No rebalance implementation for lower fees and faster swaps
     function withdraw(uint256 _shares) public nonReentrant
     {
@@ -135,17 +147,6 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         uint256 ibalance = balanceOf(msg.sender);
         withdraw(ibalance);
         
-    }
-
-    function balanceBase() public view returns(uint256) {
-        uint256 bal = base.balanceOf(address(this));
-        IERC20 vaultToken = IERC20(vaultAddress);
-        uint256 vaultBPS = 1000000000000000000; /// TO DO UPDATE THIS TO READ FROM VAULT 
-        uint256 vaultBalance = vaultToken.balanceOf(address(this)).mul(vault(vaultAddress).pricePerShare()).div(vaultBPS);
-
-        bal = bal.add(vaultBalance);
-        
-        return(bal);
     }
 
     function vaultBalance() internal view returns(uint256) {
@@ -194,25 +195,26 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         }
     }
 
-    function convertProfits() external onlyOwner {
-        //require(block.timestamp >= lastEpoch.add(timePerEpoch)); // can only convert profits once per EPOCH 
+    function harvest() public onlyAuthorized {
+        // harvest to get tokens then swap tokens
+        underlyingStrategy.harvest(); // this will get us the profits
+        convertProfits();
+    }
 
-        _withdrawFromVault();
-        uint256 profits = balanceBase().sub(totalSupply()); // 
+    function convertProfits() public onlyAuthorized {
         uint256 amountOutMin = 0; // TO DO make sure don't get front run 
+        uint256 profits = base.balanceOf(address(this));
         address[] memory path = getTokenOutPath(address(base), address(targetToken));
         uint256 preSwapBalance = targetToken.balanceOf(address(this));
         if (profits > 0){
             IUniswapV2Router01(router).swapExactTokensForTokens(profits, amountOutMin, path, address(this), block.timestamp + 100);
         }
-        _depositToVault();
+
         epochRewards[epoch] = (targetToken.balanceOf(address(this)).sub(preSwapBalance)).add(unvestedTokens); 
         epochBalance[epoch] = totalSupply();
         epoch = epoch.add(1);
         lastEpoch = block.timestamp;
         unvestedTokens = 0;
-
-
     }
 
     function _disburseRewards(address _user) internal {
@@ -233,7 +235,6 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
     }
 
 
-
     function getUserRewards(address _user) public view returns (uint256) {
         UserInfo storage user = userInfo[_user];
         uint256 rewardStart = user.epochStart;
@@ -246,9 +247,5 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         }
 
         return(rewards);      
-
     }
- 
-
-
 }
