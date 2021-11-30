@@ -21,7 +21,7 @@ import "../interfaces/vaults.sol";
 The vault container essentially allows users to deposit funds which are then deployed to a single asset vault i.e YEARN / ROBOVAULT 
 at each EPOCH any yield / profit generate from the strategy is then used to purchase the TARGET Token of the users choice 
 For example this would give users the ability to deposit into a USDC vault while their USDC balance will remain the same extra USDC could be used to buy 
-a target token such as gOHM 
+a target token such as OHM 
 
 Additionally some mechanics on vesting of the target tokens are built in encouraging users to keep their assets in the vault container over a longer period
 */
@@ -46,7 +46,7 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
     address public vaultAddress;
     address public router;
     address public weth; 
-    uint256 timePerEpoch = 43200;
+    uint256 timePerEpoch = 0; /// set to 0 for testing 
     uint256 public vestingTime = 432000;
     uint256 lastEpoch;
     uint256 public unvestedTokens = 0; 
@@ -195,14 +195,16 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
     }
 
     function convertProfits() external onlyOwner {
-        require(block.timestamp >= lastEpoch.add(timePerEpoch)); // can only convert profits once per EPOCH 
+        //require(block.timestamp >= lastEpoch.add(timePerEpoch)); // can only convert profits once per EPOCH 
 
         _withdrawFromVault();
         uint256 profits = balanceBase().sub(totalSupply()); // 
         uint256 amountOutMin = 0; // TO DO make sure don't get front run 
         address[] memory path = getTokenOutPath(address(base), address(targetToken));
         uint256 preSwapBalance = targetToken.balanceOf(address(this));
-        IUniswapV2Router01(router).swapExactTokensForTokens(profits, amountOutMin, path, address(this), now);
+        if (profits > 0){
+            IUniswapV2Router01(router).swapExactTokensForTokens(profits, amountOutMin, path, address(this), block.timestamp + 100);
+        }
         _depositToVault();
         epochRewards[epoch] = (targetToken.balanceOf(address(this)).sub(preSwapBalance)).add(unvestedTokens); 
         epochBalance[epoch] = totalSupply();
@@ -221,7 +223,7 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         targetToken.transfer(_user, rewards);
     }
 
-    function getVestingPercent(address _user) public returns (uint256) {
+    function getVestingPercent(address _user) public view returns (uint256) {
         UserInfo storage user = userInfo[_user];
         uint256 vestPercent = ((block.timestamp).sub(user.depositTime)).mul(BPS_adj).div(vestingTime);
         if (vestPercent > BPS_adj){
@@ -232,7 +234,7 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
 
 
 
-    function getUserRewards(address _user) public returns (uint256) {
+    function getUserRewards(address _user) public view returns (uint256) {
         UserInfo storage user = userInfo[_user];
         uint256 rewardStart = user.epochStart;
         uint256 rewards = 0;

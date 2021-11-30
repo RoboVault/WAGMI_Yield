@@ -1,0 +1,40 @@
+#following can be run in terminal 
+brownie console 
+
+# currently only buying OHM -> should also stake the OHM 
+targetToken = interface.ERC20('0x383518188C0C6d7730D91b2c03a03C837814a899')
+dai = interface.ERC20('0x6B175474E89094C44Da98b954EedeAC495271d0F')
+
+lp = '0x34d7d7Aaf50AD4944B70B320aCB24C95fa2def7c'
+
+daiWhale = '0xC2C5A77d9f434F424Df3d39de9e90d95A0Df5Aca'
+ohmWhale = '0x9A6da6d3c6eb7C2DacFC66bc82017c766634824b'
+
+depositor = accounts[0] #this would be OHM treasury which would allocate % of treasury to put options
+yvDAI = '0xdA816459F1AB5631232FE5e97a05BBBb94970c95'
+router = '0xd9e1cE17f2641f24aE83637ab66a2cca9C378B9F'
+weth = '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'
+container = vaultContainer.deploy("test", "test", dai, targetToken, yvDAI, router , weth ,{"from": accounts[0]})
+
+
+depositAmt = 20000000000000000000000000
+yieldAmt =    2000000000000000000000000
+totalTranfer = depositAmt + yieldAmt
+
+dai.transfer(depositor, totalTranfer, {'from' : daiWhale})
+
+dai.approve(container.address, depositAmt , {"from": depositor})
+
+container.deposit(depositAmt, {"from": depositor} )
+
+container.depositToVault({"from": depositor})
+
+dai.transfer(container.address, yieldAmt*.1, {"from": depositor})
+
+container.convertProfits({"from": depositor})
+
+container.getUserRewards(depositor)
+
+dai.transfer(container.address, yieldAmt*.2, {"from": depositor})
+
+container.convertProfits({"from": depositor})

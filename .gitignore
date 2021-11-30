@@ -13,3 +13,5 @@ build/interfaces/vault.json
 tests/test_option.py
 tests/__pycache__/conftest.cpython-38-pytest-6.2.3.pyc
 tests/__pycache__/test_option.cpython-38-pytest-6.2.3.pyc
+testVaultContainer.txt
+build/contracts/treasuryManager.json
