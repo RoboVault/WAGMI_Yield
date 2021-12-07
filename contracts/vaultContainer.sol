@@ -46,7 +46,7 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
     address public vaultAddress;
     address public router;
     address public weth; 
-    uint256 timePerEpoch = 0; /// set to 0 for testing 
+    uint256 timePerEpoch = 10000; 
     uint256 public vestingTime = 432000;
     uint256 lastEpoch;
     uint256 public unvestedTokens = 0; 
@@ -70,7 +70,6 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         targetToken = IERC20(_targetToken);
         vaultAddress = _vault;
         router = _router;
-        lastEpoch = block.timestamp;
         base.approve(vaultAddress, uint(-1));
         base.approve(router, uint(-1));
         weth = _weth;
@@ -121,7 +120,8 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
       // Check balance
       uint256 b = base.balanceOf(address(this));
       if (b < r) {
-        _withdrawFromVault();
+        uint256 withdrawAmt = (r.sub(b)).mul(vault(vaultAddress).balanceOf(address(this))).div(balanceBase());
+        _withdrawFromVault(withdrawAmt);
       }
     
       base.safeTransfer(msg.sender, r);
@@ -162,16 +162,17 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
         vault(vaultAddress).deposit(bal);
     }
 
-    function withdrawFromVault() external onlyOwner {
-        _withdrawFromVault();
+    function withdrawFromVault(uint256 _amount) external onlyOwner {
+        _withdrawFromVault(_amount);
     }
 
-    function _withdrawFromVault() internal {
-        vault(vaultAddress).withdraw();
+    function _withdrawFromVault(uint256 _amount) internal {
+        vault(vaultAddress).withdraw(_amount);
     }
 
     function updateVault(address _newVault) external onlyOwner {
-        _withdrawFromVault();
+        
+        _withdrawFromVault(vaultBalance());
         vaultAddress = _newVault;
         base.approve(vaultAddress, uint(-1));   
         _depositToVault();     
@@ -195,15 +196,24 @@ contract vaultContainer is Ownable, ERC20, ReentrancyGuard  {
     }
 
     function convertProfits() external onlyOwner {
-        //require(block.timestamp >= lastEpoch.add(timePerEpoch)); // can only convert profits once per EPOCH 
+        require(block.timestamp >= lastEpoch.add(timePerEpoch)); // can only convert profits once per EPOCH 
 
-        _withdrawFromVault();
         uint256 profits = balanceBase().sub(totalSupply()); // 
         uint256 amountOutMin = 0; // TO DO make sure don't get front run 
         address[] memory path = getTokenOutPath(address(base), address(targetToken));
         uint256 preSwapBalance = targetToken.balanceOf(address(this));
         if (profits > 0){
-            IUniswapV2Router01(router).swapExactTokensForTokens(profits, amountOutMin, path, address(this), block.timestamp + 100);
+            
+            if (base.balanceOf(address(this)) < profits) {
+                uint256 withdrawAmt = profits.mul(vault(vaultAddress).balanceOf(address(this))).div(balanceBase());
+                _withdrawFromVault(withdrawAmt);
+
+            }
+
+            uint256 swapAmt = Math.min(profits, base.balanceOf(address(this)));
+            uint256 amountOutMin = 0; // TO DO FIX THIS SO WEE DON"T GET FRONT RUN
+            address[] memory path = getTokenOutPath(address(base), address(targetToken));
+            IUniswapV2Router01(router).swapExactTokensForTokens(profits, amountOutMin, path, address(this), now);
         }
         _depositToVault();
         epochRewards[epoch] = (targetToken.balanceOf(address(this)).sub(preSwapBalance)).add(unvestedTokens); 

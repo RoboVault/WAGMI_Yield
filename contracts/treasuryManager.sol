@@ -38,13 +38,11 @@ contract treasuryManager is Ownable, ReentrancyGuard  {
     address public treasury;
     address public router;
     address public weth; 
-    uint256 timePerEpoch = 43200;
+    uint256 timePerEpoch = 0; // set to 0 for testing in reality can increase this to limit amount of times profit can be taken to save on gas
     uint256 constant yearAdj = 31557600;
     uint256 lastEpoch;
     uint256 public epoch = 0; 
-    uint256 public epochDeposits = 0;
-    uint256 public epochWithdrawals = 0;
-    uint256 public balanceTracker = 0;
+    uint256 public balanceTracker;
 
 
     constructor(
@@ -62,7 +60,6 @@ contract treasuryManager is Ownable, ReentrancyGuard  {
         targetToken = IERC20(_targetToken);
         vaultAddress = _vault;
         router = _router;
-        lastEpoch = block.timestamp;
         base.approve(vaultAddress, uint(-1));
         base.approve(router, uint(-1));
         weth = _weth;
@@ -81,16 +78,15 @@ contract treasuryManager is Ownable, ReentrancyGuard  {
     {
       require(_amount > 0, "deposit must be greater than 0");    
       base.transferFrom(treasury, address(this), _amount);
-      epochDeposits = epochDeposits.add(_amount);
+      lastEpoch = block.timestamp;
+      _depositToVault();
+      balanceTracker = balanceBase();
     }
 
 
     function withdraw(uint256 _amount) external onlyOwner
     {
-      //require(_shares > 0, "withdraw must be greater than 0");
       base.safeTransfer(treasury, _amount);
-      epochWithdrawals = epochWithdrawals.add(_amount);
-
     }
     
     function balanceBase() public view returns(uint256) {
@@ -104,7 +100,7 @@ contract treasuryManager is Ownable, ReentrancyGuard  {
         return(bal);
     }
 
-    function vaultBalance() internal view returns(uint256) {
+    function vaultBalance() public view returns(uint256) {
         uint256 bal = vault(vaultAddress).balanceOf(address(this));
         return(bal);
     }
@@ -118,16 +114,16 @@ contract treasuryManager is Ownable, ReentrancyGuard  {
         vault(vaultAddress).deposit(bal);
     }
 
-    function withdrawFromVault() external onlyApproved {
-        _withdrawFromVault();
+    function withdrawFromVault(uint256 _amount) external onlyApproved {
+        _withdrawFromVault(_amount);
     }
 
-    function _withdrawFromVault() internal {
-        vault(vaultAddress).withdraw();
+    function _withdrawFromVault(uint256 _amount) internal {
+        vault(vaultAddress).withdraw(_amount);
     }
 
     function updateVault(address _newVault) external onlyApproved {
-        _withdrawFromVault();
+        _withdrawFromVault(vaultBalance());
         vaultAddress = _newVault;
         base.approve(vaultAddress, uint(-1));   
         _depositToVault();     
@@ -154,22 +150,27 @@ contract treasuryManager is Ownable, ReentrancyGuard  {
     function convertProfits() external onlyApproved {
         require(block.timestamp >= lastEpoch.add(timePerEpoch)); // can only convert profits once per EPOCH 
         uint256 timeSinceEpoch = block.timestamp.sub(lastEpoch);
-        
-        /// TO DO -> this is potentially somewhat inefficient to withdraw 100% of funds from vault although gives accurate accounting of balance 
-        _withdrawFromVault();
+        /// _withdrawFromVault();
         uint256 expectedYield = balanceTracker.mul(targetAPR).mul(timeSinceEpoch).div(BPS_adj).div(yearAdj);
-        uint256 expectedBalance = expectedYield.add(balanceTracker).add(epochDeposits).sub(epochWithdrawals);
+        uint256 expectedBalance = expectedYield.add(balanceTracker);
         if (balanceBase() > expectedBalance) {
             uint256 profits = balanceBase().sub(expectedBalance); // 
+            if (base.balanceOf(address(this)) < profits) {
+                uint256 withdrawAmt = profits.mul(vault(vaultAddress).balanceOf(address(this))).div(balanceBase());
+                _withdrawFromVault(withdrawAmt);
+
+            }
+
+            uint256 swapAmt = Math.min(profits, base.balanceOf(address(this)));
             uint256 amountOutMin = 0; // TO DO FIX THIS SO WEE DON"T GET FRONT RUN
             address[] memory path = getTokenOutPath(address(base), address(targetToken));
-            uint256 preSwapBalance = targetToken.balanceOf(address(this));
             IUniswapV2Router01(router).swapExactTokensForTokens(profits, amountOutMin, path, treasury, now);
         }
         balanceTracker = balanceBase();
-        epochDeposits = 0;
-        epochWithdrawals = 0;
-        _depositToVault();
+        if (base.balanceOf(address(this)) > 0) { 
+            _depositToVault();
+        }
+        
         epoch = epoch.add(1);
         lastEpoch = block.timestamp;
         
